@@ -31,17 +31,24 @@ def generate_gen_profile(N,T, variance):
     return gen_profile
 
 if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('seed', type=int, default=1)
+    parser.add_argument('output_file', help='Output file or job ID. If this is an integer, will be interpreted as job ID and the output filename will be `saved_test_result_{job_id}.pkl', default='')
+    parser.add_argument('--use-test-game', action='store_true')
+    args = parser.parse_args()
+    seed = args.seed
+    use_test_game = args.use_test_game
+    try:
+        job_id = int(args.output_file)
+        args.output_file = f"saved_test_result_{job_id}.pkl"
+    except ValueError:
+        pass
     logging.basicConfig(filename='log.txt', filemode='w',level=logging.DEBUG)
-    use_test_game = False  # trigger 2-players sample zero-sum monotone game
     if use_test_game:
         print("WARNING: test game will be used.")
         logging.info("WARNING: test game will be used.")
-    if len(sys.argv) < 2:
-        seed = 1
-        job_id=0
-    else:
-        seed=int(sys.argv[1])
-        job_id = int(sys.argv[2])
     print("Random seed set to  " + str(seed))
     logging.info("Random seed set to  " + str(seed))
     np.random.seed(seed)
@@ -215,7 +222,7 @@ if __name__ == '__main__':
 
     print("Saving results...")
     logging.info("Saving results...")
-    f = open('saved_test_result_'+ str(job_id) + ".pkl", 'wb')
+    f = open(args.output_file, 'wb')
     pickle.dump([ x_store, residual_store, dual_share_store, dual_loc_store,
                   local_constr_viol, shared_const_viol,
                   loc_const_viol_tvar, shared_const_viol_tvar,

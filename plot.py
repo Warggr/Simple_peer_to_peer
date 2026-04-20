@@ -9,13 +9,14 @@ plt.rcParams.update({
     "font.family": "STIXGeneral",
     "font.serif": ["Computer Modern Roman"],
 })
-plt.rcParams['text.latex.preamble']=[r"\usepackage{amsmath}"]
+plt.rcParams['text.latex.preamble']=r"\usepackage{amsmath}"
 import networkx as nx
 import numpy as np
 import pickle
 import torch
 import os
 from itertools import cycle
+import argparse
 
 TICH = 0
 HSDM = 1
@@ -30,14 +31,16 @@ else:
 if not os.path.exists(directory + "/Figures"):
     os.makedirs(directory + r"/Figures")
 
-f = open('saved_test_result_0.pkl', 'rb')
-[x_store, residual_store, dual_share_store, dual_loc_store,
-local_constr_viol, shared_const_viol,
-loc_const_viol_tvar, shared_const_viol_tvar,
-distance_from_optimal_tvar, edge_to_index, N_iter_per_timestep ] = pickle.load(f)
+parser = argparse.ArgumentParser()
+parser.add_argument('input_file', default='saved_test_result_0.pkl')
+args = parser.parse_args()
 
+with open(args.input_file, 'rb') as f:
+    [x_store, residual_store, dual_share_store, dual_loc_store,
+    local_constr_viol, shared_const_viol,
+    loc_const_viol_tvar, shared_const_viol_tvar,
+    distance_from_optimal_tvar, edge_to_index, N_iter_per_timestep ] = pickle.load(f)
 
-f.close()
 
 N_tests = distance_from_optimal_tvar.size(0)
 T = distance_from_optimal_tvar.size(2)
