@@ -2,18 +2,18 @@ import numpy as np
 import networkx as nx
 import torch
 import pickle
-from GNE_part_info import primal_dual
+from GNE_part_info import PrimalDualPartialInfo
 from GameDefinition import AggregativePartialInfo
 from SimpleP2PSetup import SimpleP2PSetup
-import matplotlib.pyplot as plt
 import time
 import logging
-import sys
 import copy
 import math
 
+
 def gaussian(x, alpha, r):
     return 1. / (math.sqrt(alpha ** math.pi)) * np.exp(-alpha * np.power((x - r), 2.))
+
 
 def generate_load_profile(N,T, variance):
     loads = torch.zeros(N,T,1)
@@ -120,7 +120,7 @@ if __name__ == '__main__':
         #          GNE seeking                #
         #######################################
         # alg. initialization
-        alg = primal_dual(game)
+        alg = PrimalDualPartialInfo(game)
         # The theoretically-sound stepsize is too small!
         # alg.set_stepsize_using_Lip_const(safety_margin=.9)
         index_storage = 0
@@ -128,7 +128,7 @@ if __name__ == '__main__':
         for k in range(N_iter):
             if k % N_it_per_residual_computation == 0:
                 # Save performance metrics
-                x, d, d_l, aux, agg, res_est, r, c, const_viol_sh, const_viol_loc, dist_ref  = alg.get_state()
+                state, r, c, const_viol_sh, const_viol_loc, dist_ref  = alg.get_state()
                 residual_store[test, index_storage] = r
                 print("Iteration " + str(k) + " Residual: " + str(r.item()) + " Average time: " + str(avg_time_per_it))
                 logging.info("Iteration " + str(k) + " Residual: " + str(r.item()) +" Average time: " + str(avg_time_per_it))
@@ -140,13 +140,13 @@ if __name__ == '__main__':
             avg_time_per_it = (avg_time_per_it * k + (end_time - start_time)) / (k + 1)
 
         # Store final variables
-        x, d, d_l, aux, agg, res_est, r, c, const_viol_sh, const_viol_loc, dist_ref = alg.get_state()
-        x_store[test, :, :] = x.flatten(1)
-        dual_share_store[test, :, :] = d.flatten(1)
-        dual_loc_store[test,:,:] = d_l.flatten(1)
-        aux_store[test, :, :] = aux.flatten(1)
-        sigma_est_store[test,:,:] = agg.flatten(1)
-        res_est_store[test,:,:] = res_est.flatten(1)
+        state, r, c, const_viol_sh, const_viol_loc, dist_ref = alg.get_state()
+        x_store[test, :, :] = state.x.flatten(1)
+        dual_share_store[test, :, :] = state.dual.flatten(1)
+        dual_loc_store[test,:,:] = state.dual_loc.flatten(1)
+        aux_store[test, :, :] = state.aux.flatten(1)
+        sigma_est_store[test,:,:] = state.agg.flatten(1)
+        res_est_store[test,:,:] = state.res.flatten(1)
         local_constr_viol[test] = const_viol_loc
         shared_const_viol[test] = const_viol_sh
 
@@ -183,7 +183,7 @@ if __name__ == '__main__':
                 if t==0:
                     x_tvar[test,index_K, 0, :, :] = torch.zeros(game.N_agents, game.n_opt_variables) + \
                                                     torch.bmm(game_params.A_sel_positive_vars, torch.ones(game.N_agents, game.n_opt_variables, 1)).flatten(1)
-                    alg = primal_dual(game, x_0=x_tvar[test,index_K, 0, :, :].unsqueeze(2))
+                    alg = PrimalDualPartialInfo(game, x_0=x_tvar[test,index_K, 0, :, :].unsqueeze(2))
                 else:
                     # alg. re-initialization
                     x_init = x_tvar[test, index_K,t-1, :, :].unsqueeze(2)
@@ -192,7 +192,7 @@ if __name__ == '__main__':
                     dual_init = dual_tvar[test,index_K,t-1,:,:].unsqueeze(2)
                     aux_init = aux_tvar[test,index_K,t-1,:,:].unsqueeze(2)
                     dual_loc_init = dual_loc_tvar[test,index_K,t-1,:,:].unsqueeze(2)
-                    alg = primal_dual(game, x_0=x_init, agg_0=agg_init, res_0=res_init, dual_0=dual_init, aux_0=aux_init, dual_loc_0=dual_loc_init)
+                    alg = PrimalDualPartialInfo(game, x_0=x_init, agg_0=agg_init, res_0=res_init, dual_0=dual_init, aux_0=aux_init, dual_loc_0=dual_loc_init)
                 for k in range(N_iter_per_timestep[index_K]):
                     #  Algorithm run
                     alg.run_once()
@@ -205,14 +205,14 @@ if __name__ == '__main__':
                 # x_ref = torch.reshape(x_ref, (x_ref.size(0) * x_ref.size(1), 1))
                 # d_loc_ref = torch.reshape(d_loc_ref, (d_loc_ref.size(0) * d_loc_ref.size(1), 1))
                 # omega_ref = torch.row_stack((x_ref, d_ref_avg, d_loc_ref))
-                x, d, d_l, aux, agg, res_est, r, c, const_viol_sh, const_viol_loc, dist_ref = alg.get_state(x_ref)
+                state, r, c, const_viol_sh, const_viol_loc, dist_ref = alg.get_state(x_ref)
                 # store computed decision variables (THESE ARE ALSO USED FOR THE RE-INITIALIZATION)
-                x_tvar[test, index_K,t, : ,:] =x.flatten(1)
-                agg_tvar[test, index_K,t, : ,:] =agg.flatten(1)
-                res_tvar[test, index_K,t, : ,:] =res_est.flatten(1)
-                dual_tvar[test,index_K, t, : ,:] =d.flatten(1)
-                aux_tvar[test, index_K,t, : ,:] = aux.flatten(1)
-                dual_loc_tvar[test, index_K,t,:,:] =d_l.flatten(1)
+                x_tvar[test, index_K,t, : ,:] = state.x.flatten(1)
+                agg_tvar[test, index_K,t, : ,:] = state.agg.flatten(1)
+                res_tvar[test, index_K,t, : ,:] = state.res.flatten(1)
+                dual_tvar[test,index_K, t, : ,:] = state.dual.flatten(1)
+                aux_tvar[test, index_K,t, : ,:] = state.aux.flatten(1)
+                dual_loc_tvar[test, index_K,t,:,:] = state.dual_loc.flatten(1)
                 # Store performance variables
                 loc_const_viol_tvar[test,index_K, t] = const_viol_loc
                 shared_const_viol_tvar[test,index_K, t] = const_viol_sh
