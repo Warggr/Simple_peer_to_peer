@@ -9,7 +9,9 @@ import time
 import logging
 import copy
 import math
+import jax.numpy as jnp
 
+torch.set_default_dtype(torch.float64)
 
 def gaussian(x, alpha, r):
     return 1. / (math.sqrt(alpha ** math.pi)) * np.exp(-alpha * np.power((x - r), 2.))
@@ -92,16 +94,25 @@ if __name__ == '__main__':
         ##########################################
         #             Game inizialization        #
         ##########################################
-        game = AggregativePartialInfo(N_agents, comm_graph, game_params.Q, game_params.q, game_params.C, game_params.D,\
-                                      game_params.A_eq_local_const, game_params.b_eq_local_const, \
-                                      game_params.A_eq_shared_const, game_params.b_eq_shared_const, game_params.A_sel_positive_vars)
+        game = AggregativePartialInfo(N_agents,
+            comm_graph,
+            jnp.array(game_params.Q),
+            jnp.array(game_params.q),
+            jnp.array(game_params.C),
+            jnp.array(game_params.D),
+            jnp.array(game_params.A_eq_local_const),
+            jnp.array(game_params.b_eq_local_const),
+            jnp.array(game_params.A_eq_shared_const),
+            jnp.array(game_params.b_eq_shared_const),
+            jnp.array(game_params.A_sel_positive_vars)
+        )
         x_0 = torch.zeros(game.N_agents, game.n_opt_variables) + \
             torch.bmm(game_params.A_sel_positive_vars, torch.ones(game.N_agents, game.n_opt_variables, 1)).flatten(1)
         if test == 0:
             print("The game has " + str(game.N_agents) + " agents; " + str(game.n_opt_variables) + " opt. variables per agent; " \
                   + " local eq. constraints; " + str(game.n_shared_eq_constr) + " shared eq. constraints" )
             logging.info("The game has " + str(game.N_agents) + " agents; " + str(game.n_opt_variables) + " opt. variables per agent; " \
-                  + str(game.A_eq_loc.size()[1]) + " local eq. constraints; " + str(game.n_shared_eq_constr) + " shared eq. constraints" )
+                  + str(game.A_eq_loc.shape[1]) + " local eq. constraints; " + str(game.n_shared_eq_constr) + " shared eq. constraints" )
             ##########################################
             #   Variables storage inizialization     #
             ##########################################
