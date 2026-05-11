@@ -3,13 +3,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, Generic
 
+import jax
 import numpy as np
-import torch
+import jax.numpy as jnp
+import jax.scipy as jsp
 from operators.backwardStep import BackwardStep
-from GameDefinition import AggregativePartialInfo
+from GameDefinition import AggregativePartialInfo, bmm, bmm3
 
 if TYPE_CHECKING:
     from typing import Tuple
+    from jaxtyping import Float, Array
 
 
 Problem = TypeVar('Problem')
@@ -35,22 +38,22 @@ class Solver(ABC, Generic[Problem, State]):
         Runs one iteration of the algorithm. Call `self.get_state` afterwards to get the current state.
         """
 
-
+@jax.tree_util.register_dataclass
 @dataclass
 class PrimalDualPartialInfoState:
-    x: torch.Tensor
-    dual: torch.Tensor
-    dual_loc: torch.Tensor
-    aux: torch.Tensor
-    res: torch.Tensor
-    agg: torch.Tensor
+    x: Float[Array, ""]
+    dual: Float[Array, ""]
+    dual_loc: Float[Array, ""]
+    aux: Float[Array, ""]
+    res: Float[Array, ""]
+    agg: Float[Array, ""]
 
 
-def j2t(x):
-    return torch.from_numpy(np.array(x))
+def transpose(A, i, j):
+    axes = list(range(len(A.shape)))
+    axes[i], axes[j] = axes[j], axes[i]
+    return jnp.transpose(A, axes)
 
-def t2j(x):
-    return np.array(x)
 
 class PrimalDualPartialInfo(Solver[AggregativePartialInfo, PrimalDualPartialInfoState]):
     """
@@ -67,17 +70,17 @@ class PrimalDualPartialInfo(Solver[AggregativePartialInfo, PrimalDualPartialInfo
         m = game.n_shared_eq_constr
         m_loc = game.n_loc_eq_constr
         if x_0 is None:
-            x_0 = torch.zeros(self.N, n, 1)
+            x_0 = jnp.zeros((self.N, n, 1))
         if agg_0 is None:
-            agg_0 = j2t(self.game.S(t2j(x_0)))
+            agg_0 = self.game.S(x_0)
         if res_0 is None:
-            res_0 = torch.bmm(j2t(self.game.A_eq_shared), x_0) - j2t(self.game.b_eq_shared)
+            res_0 = bmm3(self.game.A_eq_shared, x_0) - self.game.b_eq_shared
         if aux_0 is None:
-            aux_0 = torch.zeros(self.N,m, 1)
+            aux_0 = jnp.zeros((self.N,m, 1))
         if dual_0 is None:
             dual_0 = aux_0
         if dual_loc_0 is None:
-            dual_loc_0 = torch.zeros(self.N,m_loc, 1)
+            dual_loc_0 = jnp.zeros((self.N,m_loc, 1))
         self.state = PrimalDualPartialInfoState(
             x=x_0,
             agg=agg_0,
@@ -89,29 +92,27 @@ class PrimalDualPartialInfo(Solver[AggregativePartialInfo, PrimalDualPartialInfo
         # These are used to store the previous iteration value (needed for residual computation)
         self.state_last = self.state
 
-    def run_once(self):
-        x = self.state.x
-        agg = self.state.agg
-        res = self.state.res
-        dual = self.state.dual
-        dual_loc = self.state.dual_loc
-        aux = self.state.aux
-        A_i = j2t(self.game.A_eq_shared)
-        b_i = j2t(self.game.b_eq_shared)
-        A_i_loc = j2t(self.game.A_eq_loc)
-        b_i_loc = j2t(self.game.b_eq_loc)
-        F = j2t(self.game.F(np.array(x),np.array(agg)))
-
-        # run updates
-        x_new = x - self.stepsize * (F + torch.bmm(torch.transpose(A_i, 1, 2), self.state.dual) + torch.bmm(torch.transpose(A_i_loc, 1, 2), self.state.dual_loc))
-        dual_loc_new = dual_loc + self.stepsize * (torch.bmm(A_i_loc, x) - b_i_loc)
+    @jax.jit(static_argnums=(0,))
+    def _update(self, old_state: PrimalDualPartialInfoState) -> PrimalDualPartialInfoState:
+        x = old_state.x
+        agg = old_state.agg
+        res = old_state.res
+        dual = old_state.dual
+        dual_loc = old_state.dual_loc
+        aux = old_state.aux
+        A_i = self.game.A_eq_shared
+        b_i = self.game.b_eq_shared
+        A_i_loc = self.game.A_eq_loc
+        b_i_loc = self.game.b_eq_loc
+        F = self.game.F(x,agg)
+        x_new = x - self.stepsize * (F + bmm3(transpose(A_i, 1,2), old_state.dual) + bmm3(transpose(A_i_loc, 1,2), old_state.dual_loc))
+        dual_loc_new = dual_loc + self.stepsize * (bmm3(A_i_loc, x) - b_i_loc)
         aux_new = aux + self.stepsize * self.N * res
         # the function game.W applies the incidence matrix, the function game.S computes the aggregation
-        agg_new = j2t(self.game.W(np.array(agg)) + self.game.S(np.array(x_new)) - self.game.S(np.array(x)))
-        res_new = j2t(self.game.W(np.array(res))) + torch.bmm(A_i,x_new-x)
-        dual_new = j2t(self.game.W(t2j(dual))) + aux_new - aux
-
-        self.state = PrimalDualPartialInfoState(
+        agg_new = self.game.W(agg) + self.game.S(x_new) - self.game.S(x)
+        res_new = self.game.W(res) + bmm3(A_i,x_new-x)
+        dual_new = self.game.W(dual) + aux_new - aux
+        return PrimalDualPartialInfoState(
             x=x_new,
             aux=aux_new,
             agg=agg_new,
@@ -120,18 +121,16 @@ class PrimalDualPartialInfo(Solver[AggregativePartialInfo, PrimalDualPartialInfo
             dual_loc=dual_loc_new,
         )
 
-        self.state_last = PrimalDualPartialInfoState(
-            x=x,
-            dual=dual,
-            dual_loc=dual_loc,
-            aux=aux,
-            res=res,
-            agg=agg,
-        )
+    def run_once(self):
+        self.state_last = self.state
+        self.state = self._update(self.state)
 
-    def get_state(self, ref_point=None):
+    def get_state(self, ref_point=None) -> tuple[
+        PrimalDualPartialInfoState,
+        float, float, float, float, float | None
+    ]:
         residual,  constr_viol_sh, constr_viol_loc = self.compute_residual()
-        cost = self.game.J(t2j(self.state.x))
+        cost = self.game.J(self.state.x)
         if ref_point is not None:
             dist_ref = self.compute_distance_from_ref(ref_point)
         else:
@@ -140,48 +139,48 @@ class PrimalDualPartialInfo(Solver[AggregativePartialInfo, PrimalDualPartialInfo
 
     def compute_distance_from_ref(self, ref_x):
         x = self.state.x
-        # d_avg = torch.mean(self.dual, dim=0)
+        # d_avg = jnp.mean(self.dual, axis=0)
         # d_loc = self.dual_loc
-        # x = torch.reshape(x, (x.size(0) * x.size(1), 1))
-        # d_loc = torch.reshape(d_loc, (d_loc.size(0) * d_loc.size(1), 1))
-        # omega_1 = torch.row_stack((x, d_avg, d_loc))
-        # dist_ref = torch.matmul(torch.matmul(torch.transpose(omega_1-ref_point,0,1), torch.from_numpy(self.P)), omega_1-ref_point)
-        dist_ref = torch.norm(x-ref_x)
+        # x = jnp.reshape(x, (x.shape[0] * x.shape[1], 1))
+        # d_loc = jnp.reshape(d_loc, (d_loc.shape[0] * d_loc.shape[1], 1))
+        # omega_1 = jnp.hstack((x, d_avg, d_loc))
+        # dist_ref = jnp.matmul(jnp.matmul(jnp.transpose(omega_1-ref_point,0,1), jnp.from_numpy(self.P)), omega_1-ref_point)
+        dist_ref = jnp.linalg.norm(x-ref_x)
         return dist_ref
 
-    def compute_residual(self):
+    def compute_residual(self) -> tuple[float, float, float]:
         # As the game is strongly monotone, the convergence is checked by x_{t+1} - x_t.
         # A_i = self.game.A_eq_shared
         # b_i = self.game.b_eq_shared
         # x = self.x
-        # x_res, status = self.game.F(x) - torch.matmul(torch.transpose(A_i, 1, 2), self.dual)
-        # d_res = torch.bmm(A_i, self.x) - b_i
+        # x_res, status = self.game.F(x) - jnp.matmul(jnp.transpose(A_i, 1, 2), self.dual)
+        # d_res = bmm3(A_i, self.x) - b_i
         # residual = np.sqrt( ((x_res).norm())**2 + ((d_res).norm())**2 )
 
         P = self.P
         x = self.state.x
-        d_avg = torch.mean(self.state.dual, dim=0)
-        A_sh = j2t(self.game.A_eq_shared)
-        b_sh = torch.sum(j2t(self.game.b_eq_shared), dim=0)
-        A_i_loc = j2t(self.game.A_eq_loc)
-        b_i_loc = j2t(self.game.b_eq_loc)
+        d_avg = jnp.mean(self.state.dual, axis=0)
+        A_sh = self.game.A_eq_shared
+        b_sh = jnp.sum(self.game.b_eq_shared, axis=0)
+        A_i_loc = self.game.A_eq_loc
+        b_i_loc = self.game.b_eq_loc
         # reshape everything in a column vector
-        res_x = j2t(self.game.F(t2j(x))) + torch.matmul(torch.transpose(A_sh, 1,2), d_avg) + torch.bmm(torch.transpose(A_i_loc, 1, 2), self.state.dual_loc)
-        res_d_sh = torch.sum(torch.bmm(A_sh, x), dim=0) - torch.sum(b_sh, dim=0)
-        res_d_loc = torch.bmm(A_i_loc, x)- b_i_loc
-        res_x = torch.reshape(res_x, (res_x.size(0) * res_x.size(1), 1))
-        res_d_loc = torch.reshape(res_d_loc, (res_d_loc.size(0) * res_d_loc.size(1), 1) )
-        res_avg_track = torch.norm(self.state.dual - d_avg*torch.ones(self.state.dual.size()))**2
-        res_res_track = torch.norm(self.state.res - torch.mean(self.state.res,dim=0) * torch.ones(self.state.res.size()))**2
-        res_agg_track = torch.norm(self.state.agg - torch.mean(self.state.agg, dim=0) * torch.ones(self.state.agg.size()))**2
+        res_x = self.game.F(x) + jnp.matmul(transpose(A_sh, 1,2), d_avg) + bmm3(transpose(A_i_loc, 1,2), self.state.dual_loc)
+        res_d_sh = jnp.sum(bmm3(A_sh, x), axis=0) - jnp.sum(b_sh, axis=0)
+        res_d_loc = bmm3(A_i_loc, x)- b_i_loc
+        res_x = jnp.reshape(res_x, (res_x.shape[0] * res_x.shape[1], 1))
+        res_d_loc = jnp.reshape(res_d_loc, (res_d_loc.shape[0] * res_d_loc.shape[1], 1) )
+        res_avg_track = jnp.linalg.norm(self.state.dual - d_avg*jnp.ones(self.state.dual.shape))**2
+        res_res_track = jnp.linalg.norm(self.state.res - jnp.mean(self.state.res,axis=0) * jnp.ones(self.state.res.shape))**2
+        res_agg_track = jnp.linalg.norm(self.state.agg - jnp.mean(self.state.agg, axis=0) * jnp.ones(self.state.agg.shape))**2
 
-        omega_1_res = torch.row_stack((res_x, res_d_sh, res_d_loc))
-        residual = .5*torch.matmul(torch.matmul( torch.transpose(omega_1_res, 0,1), torch.from_numpy(P)), omega_1_res) \
+        omega_1_res = jnp.vstack((res_x, res_d_sh, res_d_loc))
+        residual = .5*jnp.matmul(jnp.matmul(transpose(omega_1_res, 0,1), P), omega_1_res) \
                    + res_avg_track + res_res_track + res_agg_track
-        constr_viol_sh = torch.norm(res_d_sh )
-        constr_viol_loc = torch.sqrt(torch.norm(res_d_loc )**2 + \
-                          torch.norm(torch.minimum(torch.bmm(j2t(self.game.A_sel_positive_vars),x), torch.zeros(x.size()) ))**2)
-        return residual, constr_viol_sh, constr_viol_loc
+        constr_viol_sh = jnp.linalg.norm(res_d_sh )
+        constr_viol_loc = jnp.sqrt(jnp.linalg.norm(res_d_loc )**2 + \
+                          jnp.linalg.norm(jnp.minimum(bmm3(self.game.A_sel_positive_vars,x), jnp.zeros(x.shape) ))**2)
+        return residual.item(), constr_viol_sh, constr_viol_loc
 
 
 
@@ -191,13 +190,15 @@ class PrimalDualPartialInfo(Solver[AggregativePartialInfo, PrimalDualPartialInfo
         N = self.game.N_agents
         m_sh = self.game.n_shared_eq_constr
         m_loc = self.game.n_loc_eq_constr
-        list_of_A_sh_i = [j2t(self.game.A_eq_shared[i, :, :]) for i in range(N)]
-        list_of_A_loc_i = [j2t(self.game.A_eq_loc[i,:,:]) for i in range(N)]
-        A = torch.row_stack( (torch.column_stack(list_of_A_sh_i), torch.block_diag(*list_of_A_loc_i)) )
+        list_of_A_sh_i = [self.game.A_eq_shared[i, :, :] for i in range(N)]
+        list_of_A_loc_i = [self.game.A_eq_loc[i,:,:] for i in range(N)]
+        A = jnp.vstack( (jnp.column_stack(list_of_A_sh_i), jsp.linalg.block_diag(*list_of_A_loc_i)) )
         mu_A, L_A = self.game.get_strMon_Lip_constants_eq_constraints()
         nu = .5 * 4 * mu_F * mu_A / (L_F * L_F * L_A * L_A + 4 * mu_A * L_A * L_A)
-        P = np.block([[np.eye(n * N), np.array(nu * torch.transpose(A, 0, 1).numpy())],
-                      [np.array(nu * A.numpy()), np.eye(m_sh + m_loc*N)]])
+        P = jnp.block([
+            [jnp.eye(n * N), nu * A.T],
+            [nu * A, jnp.eye(m_sh + m_loc*N)],
+        ])
         return P, nu
 
     def set_stepsize_using_Lip_const(self, safety_margin=0.5):

@@ -1,35 +1,35 @@
 import numpy as np
 import networkx as nx
-import torch
 import pickle
 from GNE_part_info import PrimalDualPartialInfo
-from GameDefinition import AggregativePartialInfo
+from GameDefinition import AggregativePartialInfo, bmm3
 from SimpleP2PSetup import SimpleP2PSetup
+from jaxtyping import Float, Array
 import time
 import logging
 import copy
 import math
 import jax.numpy as jnp
 
-torch.set_default_dtype(torch.float64)
 
 def gaussian(x, alpha, r):
     return 1. / (math.sqrt(alpha ** math.pi)) * np.exp(-alpha * np.power((x - r), 2.))
 
 
-def generate_load_profile(N,T, variance):
-    loads = torch.zeros(N,T,1)
+def generate_load_profile(N,T, variance) -> Float[np.ndarray, ""]:
+    loads = np.zeros((N,T,1))
     for i in range(N):
         peak_time = min(max(0.1*np.random.randn(), -1),1)
         steepness = 1/(max(0.3*np.random.randn() ,.1))
         x = np.linspace(-1, 1, num=T)
         nominal_load = gaussian(x, steepness, peak_time) + 1
-        loads[i,:,0] = torch.from_numpy(nominal_load + variance*np.random.randn(T))
+        loads[i,:,0] = nominal_load + variance*np.random.randn(T)
     return loads
-def generate_gen_profile(N,T, variance):
-    gen_profile = torch.zeros(N,T,1)
-    nominal_profile = torch.matmul(torch.from_numpy(np.random.rand(N,1))+0.5, torch.ones(1,T) )
-    gen_profile[:,:,0] = nominal_profile + torch.from_numpy(variance*np.random.randn(N,T))
+
+def generate_gen_profile(N,T, variance) -> Float[np.ndarray, ""]:
+    gen_profile = np.zeros((N,T,1))
+    nominal_profile = np.matmul((np.random.rand(N,1))+0.5, np.ones((1,T)) )
+    gen_profile[:,:,0] = nominal_profile + variance*np.random.randn(N,T)
     return gen_profile
 
 if __name__ == '__main__':
@@ -94,20 +94,11 @@ if __name__ == '__main__':
         ##########################################
         #             Game inizialization        #
         ##########################################
-        game = AggregativePartialInfo(N_agents,
-            comm_graph,
-            jnp.array(game_params.Q),
-            jnp.array(game_params.q),
-            jnp.array(game_params.C),
-            jnp.array(game_params.D),
-            jnp.array(game_params.A_eq_local_const),
-            jnp.array(game_params.b_eq_local_const),
-            jnp.array(game_params.A_eq_shared_const),
-            jnp.array(game_params.b_eq_shared_const),
-            jnp.array(game_params.A_sel_positive_vars)
-        )
-        x_0 = torch.zeros(game.N_agents, game.n_opt_variables) + \
-            torch.bmm(game_params.A_sel_positive_vars, torch.ones(game.N_agents, game.n_opt_variables, 1)).flatten(1)
+        game = AggregativePartialInfo(N_agents, comm_graph, game_params.Q, game_params.q, game_params.C, game_params.D,\
+                                      game_params.A_eq_local_const, game_params.b_eq_local_const, \
+                                      game_params.A_eq_shared_const, game_params.b_eq_shared_const, game_params.A_sel_positive_vars)
+        x_0 = jnp.zeros((game.N_agents, game.n_opt_variables)) + \
+            bmm3(game_params.A_sel_positive_vars, jnp.ones((game.N_agents, game.n_opt_variables, 1))).squeeze(2)
         if test == 0:
             print("The game has " + str(game.N_agents) + " agents; " + str(game.n_opt_variables) + " opt. variables per agent; " \
                   + " local eq. constraints; " + str(game.n_shared_eq_constr) + " shared eq. constraints" )
@@ -117,15 +108,15 @@ if __name__ == '__main__':
             #   Variables storage inizialization     #
             ##########################################
             # pFB-Tichonov
-            x_store = torch.zeros(N_random_tests, game.N_agents, game.n_opt_variables)
-            dual_share_store = torch.zeros(N_random_tests, game.N_agents, game.n_shared_eq_constr)
-            dual_loc_store = torch.zeros(N_random_tests, game.N_agents, game.n_loc_eq_constr)
-            aux_store = torch.zeros(N_random_tests, game.N_agents, game.n_shared_eq_constr)
-            res_est_store = torch.zeros(N_random_tests, game.N_agents, game.n_shared_eq_constr)
-            sigma_est_store = torch.zeros(N_random_tests, game.N_agents, game.n_agg_variables)
-            residual_store = torch.zeros(N_random_tests, (N_iter // N_it_per_residual_computation))
-            local_constr_viol = torch.zeros(N_random_tests, 1)
-            shared_const_viol = torch.zeros(N_random_tests, 1)
+            x_store = np.zeros((N_random_tests, game.N_agents, game.n_opt_variables))
+            dual_share_store = np.zeros((N_random_tests, game.N_agents, game.n_shared_eq_constr))
+            dual_loc_store = np.zeros((N_random_tests, game.N_agents, game.n_loc_eq_constr))
+            aux_store = np.zeros((N_random_tests, game.N_agents, game.n_shared_eq_constr))
+            res_est_store = np.zeros((N_random_tests, game.N_agents, game.n_shared_eq_constr))
+            sigma_est_store = np.zeros((N_random_tests, game.N_agents, game.n_agg_variables))
+            residual_store = np.zeros((N_random_tests, (N_iter // N_it_per_residual_computation)))
+            local_constr_viol = np.zeros((N_random_tests, 1))
+            shared_const_viol = np.zeros((N_random_tests, 1))
 
         #######################################
         #          GNE seeking                #
@@ -141,8 +132,8 @@ if __name__ == '__main__':
                 # Save performance metrics
                 state, r, c, const_viol_sh, const_viol_loc, dist_ref  = alg.get_state()
                 residual_store[test, index_storage] = r
-                print("Iteration " + str(k) + " Residual: " + str(r.item()) + " Average time: " + str(avg_time_per_it))
-                logging.info("Iteration " + str(k) + " Residual: " + str(r.item()) +" Average time: " + str(avg_time_per_it))
+                print("Iteration " + str(k) + " Residual: " + str(r) + " Average time: " + str(avg_time_per_it))
+                logging.info("Iteration " + str(k) + " Residual: " + str(r) +" Average time: " + str(avg_time_per_it))
                 index_storage = index_storage + 1
             #  Algorithm run
             start_time = time.time()
@@ -152,12 +143,12 @@ if __name__ == '__main__':
 
         # Store final variables
         state, r, c, const_viol_sh, const_viol_loc, dist_ref = alg.get_state()
-        x_store[test, :, :] = state.x.flatten(1)
-        dual_share_store[test, :, :] = state.dual.flatten(1)
-        dual_loc_store[test,:,:] = state.dual_loc.flatten(1)
-        aux_store[test, :, :] = state.aux.flatten(1)
-        sigma_est_store[test,:,:] = state.agg.flatten(1)
-        res_est_store[test,:,:] = state.res.flatten(1)
+        x_store[test, :, :] = state.x.squeeze(2)
+        dual_share_store[test, :, :] = state.dual.squeeze(2)
+        dual_loc_store[test,:,:] = state.dual_loc.squeeze(2)
+        aux_store[test, :, :] = state.aux.squeeze(2)
+        sigma_est_store[test,:,:] = state.agg.squeeze(2)
+        res_est_store[test,:,:] = state.res.squeeze(2)
         local_constr_viol[test] = const_viol_loc
         shared_const_viol[test] = const_viol_sh
 
@@ -168,8 +159,8 @@ if __name__ == '__main__':
             for t in range(T):
                 print("Initializing time-step" + str(t) + " out of " + str(T))
                 logging.info("Initializing time-step" + str(t) + " out of " + str(T))
-                game_params = SimpleP2PSetup(N_agents, n_neighbors, comm_graph, c_mg, c_pr, c_tr, c_regul, 1, x_pr_setpoint[:,t].unsqueeze(1),
-                                             loads[:,t].unsqueeze(1))
+                game_params = SimpleP2PSetup(N_agents, n_neighbors, comm_graph, c_mg, c_pr, c_tr, c_regul, 1, jnp.expand_dims(x_pr_setpoint[:,t], 1),
+                                             jnp.expand_dims(loads[:,t], 1))
                 game_old = copy.deepcopy(game)
                 game = AggregativePartialInfo(N_agents, comm_graph, game_params.Q, game_params.q, game_params.C,
                                               game_params.D, \
@@ -181,35 +172,35 @@ if __name__ == '__main__':
                     s = game.n_agg_variables
                     m = game.n_shared_eq_constr
                     m_loc = game.n_loc_eq_constr
-                    x_tvar = torch.zeros(N_random_tests, len(N_iter_per_timestep), T, N_agents, n)
-                    agg_tvar = torch.zeros(N_random_tests, len(N_iter_per_timestep),T, N_agents, s)
-                    res_tvar = torch.zeros(N_random_tests, len(N_iter_per_timestep),T, N_agents, m)
-                    dual_tvar = torch.zeros(N_random_tests, len(N_iter_per_timestep),  T, N_agents, m)
-                    aux_tvar = torch.zeros(N_random_tests, len(N_iter_per_timestep), T, N_agents, m)
-                    dual_loc_tvar = torch.zeros(N_random_tests, len(N_iter_per_timestep), T, N_agents, m_loc)
+                    x_tvar = np.zeros((N_random_tests, len(N_iter_per_timestep), T, N_agents, n))
+                    agg_tvar = np.zeros((N_random_tests, len(N_iter_per_timestep),T, N_agents, s))
+                    res_tvar = np.zeros((N_random_tests, len(N_iter_per_timestep),T, N_agents, m))
+                    dual_tvar = np.zeros((N_random_tests, len(N_iter_per_timestep),  T, N_agents, m))
+                    aux_tvar = np.zeros((N_random_tests, len(N_iter_per_timestep), T, N_agents, m))
+                    dual_loc_tvar = np.zeros((N_random_tests, len(N_iter_per_timestep), T, N_agents, m_loc))
                     # Performance metrics
-                    shared_const_viol_tvar = torch.zeros(N_random_tests,len(N_iter_per_timestep),T)
-                    loc_const_viol_tvar = torch.zeros(N_random_tests,len(N_iter_per_timestep), T)
-                    distance_from_optimal_tvar = torch.zeros(N_random_tests,len(N_iter_per_timestep), T)
+                    shared_const_viol_tvar = np.zeros((N_random_tests,len(N_iter_per_timestep),T))
+                    loc_const_viol_tvar = np.zeros((N_random_tests,len(N_iter_per_timestep), T))
+                    distance_from_optimal_tvar = np.zeros((N_random_tests,len(N_iter_per_timestep), T))
                 if t==0:
-                    x_tvar[test,index_K, 0, :, :] = torch.zeros(game.N_agents, game.n_opt_variables) + \
-                                                    torch.bmm(game_params.A_sel_positive_vars, torch.ones(game.N_agents, game.n_opt_variables, 1)).flatten(1)
-                    alg = PrimalDualPartialInfo(game, x_0=x_tvar[test,index_K, 0, :, :].unsqueeze(2))
+                    x_tvar[test,index_K, 0, :, :] = jnp.zeros((game.N_agents, game.n_opt_variables)) + \
+                                                    bmm3(game_params.A_sel_positive_vars, jnp.ones((game.N_agents, game.n_opt_variables, 1))).squeeze(2)
+                    alg = PrimalDualPartialInfo(game, x_0=jnp.expand_dims(x_tvar[test,index_K, 0, :, :], 2))
                 else:
                     # alg. re-initialization
-                    x_init = x_tvar[test, index_K,t-1, :, :].unsqueeze(2)
-                    agg_init = agg_tvar[test,index_K,t-1,:,:].unsqueeze(2) - game_old.S(x_init) + game.S(x_init)
-                    res_init = res_tvar[test,index_K,t-1,:,:].unsqueeze(2) - game_old.b_eq_shared + game.b_eq_shared
-                    dual_init = dual_tvar[test,index_K,t-1,:,:].unsqueeze(2)
-                    aux_init = aux_tvar[test,index_K,t-1,:,:].unsqueeze(2)
-                    dual_loc_init = dual_loc_tvar[test,index_K,t-1,:,:].unsqueeze(2)
+                    x_init = jnp.expand_dims(x_tvar[test, index_K,t-1, :, :], 2)
+                    agg_init = jnp.expand_dims(agg_tvar[test,index_K,t-1,:,:], 2) - game_old.S(x_init) + game.S(x_init)
+                    res_init = jnp.expand_dims(res_tvar[test,index_K,t-1,:,:], 2) - game_old.b_eq_shared + game.b_eq_shared
+                    dual_init = jnp.expand_dims(dual_tvar[test,index_K,t-1,:,:], 2)
+                    aux_init = jnp.expand_dims(aux_tvar[test,index_K,t-1,:,:], 2)
+                    dual_loc_init = jnp.expand_dims(dual_loc_tvar[test,index_K,t-1,:,:], 2)
                     alg = PrimalDualPartialInfo(game, x_0=x_init, agg_0=agg_init, res_0=res_init, dual_0=dual_init, aux_0=aux_init, dual_loc_0=dual_loc_init)
                 for k in range(N_iter_per_timestep[index_K]):
                     #  Algorithm run
                     alg.run_once()
 
                 # Compute P-distance with respect to pre-computed GNE
-                x_ref = x_store[test, :, t*n:(t+1)*n].unsqueeze(2)
+                x_ref = jnp.expand_dims(x_store[test, :, t*n:(t+1)*n], 2)
                 # d_ref = dual_share_store[test, :, t*m:(t+1)*m].unsqueeze(2)
                 # d_loc_ref = dual_loc_store[test, :, t*m_loc:(t+1)*m_loc].unsqueeze(2)
                 # d_ref_avg = torch.mean(d_ref, dim=0)
@@ -218,18 +209,18 @@ if __name__ == '__main__':
                 # omega_ref = torch.row_stack((x_ref, d_ref_avg, d_loc_ref))
                 state, r, c, const_viol_sh, const_viol_loc, dist_ref = alg.get_state(x_ref)
                 # store computed decision variables (THESE ARE ALSO USED FOR THE RE-INITIALIZATION)
-                x_tvar[test, index_K,t, : ,:] = state.x.flatten(1)
-                agg_tvar[test, index_K,t, : ,:] = state.agg.flatten(1)
-                res_tvar[test, index_K,t, : ,:] = state.res.flatten(1)
-                dual_tvar[test,index_K, t, : ,:] = state.dual.flatten(1)
-                aux_tvar[test, index_K,t, : ,:] = state.aux.flatten(1)
-                dual_loc_tvar[test, index_K,t,:,:] = state.dual_loc.flatten(1)
+                x_tvar[test, index_K,t, : ,:] = state.x.squeeze(2)
+                agg_tvar[test, index_K,t, : ,:] = state.agg.squeeze(2)
+                res_tvar[test, index_K,t, : ,:] = state.res.squeeze(2)
+                dual_tvar[test,index_K, t, : ,:] = state.dual.squeeze(2)
+                aux_tvar[test, index_K,t, : ,:] = state.aux.squeeze(2)
+                dual_loc_tvar[test, index_K,t,:,:] = state.dual_loc.squeeze(2)
                 # Store performance variables
                 loc_const_viol_tvar[test,index_K, t] = const_viol_loc
                 shared_const_viol_tvar[test,index_K, t] = const_viol_sh
                 distance_from_optimal_tvar[test,index_K,t] = dist_ref
-                print("Timestep " + str(t) + " Distance from ref.: " + str(dist_ref.item()), " Constr. violation: " + str(const_viol_sh.item() + const_viol_loc.item()))
-                logging.info("Timestep " + str(t) + " Distance from ref.: " + str(dist_ref.item()))
+                print("Timestep " + str(t) + " Distance from ref.: " + str(dist_ref), " Constr. violation: " + str(const_viol_sh + const_viol_loc))
+                logging.info("Timestep " + str(t) + " Distance from ref.: " + str(dist_ref))
 
     print("Saving results...")
     logging.info("Saving results...")
