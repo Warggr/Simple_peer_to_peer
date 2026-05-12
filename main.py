@@ -32,6 +32,36 @@ def generate_gen_profile(N,T, variance) -> Float[np.ndarray, ""]:
     gen_profile[:,:,0] = nominal_profile + variance*np.random.randn(N,T)
     return gen_profile
 
+def get_graph(
+    N_agents: int,
+    n_neighbors=2,
+    seed: int | None = None,
+):
+    comm_graph = nx.random_regular_graph(n_neighbors, N_agents, seed=seed)
+    while not nx.is_connected(comm_graph):
+        n_neighbors = n_neighbors+1
+        comm_graph = nx.random_regular_graph(n_neighbors, N_agents)
+    # add self loops
+    for i in comm_graph.nodes:
+        comm_graph.add_edge(i,i)
+    # Make graph stochastic WARNING: THIS IS ALSO DOUBLY STOCHASTIC ONLY BECAUSE WE ARE USING A REGULAR GRAPH
+    return n_neighbors, nx.stochastic_graph(comm_graph.to_directed()).to_undirected()
+
+def get_game(
+    loads, x_pr_setpoint, T,
+    N_agents,
+    comm_graph = None,
+    n_neighbors=2,  # for simplicity, each agent has the same number of neighbours. This is only used to create the communication graph (but i's not needed otherwise)
+    c_mg = 10,
+    c_pr = 10,
+    c_tr = 1,
+    c_regul = 0.1,
+    seed: int | None = None,
+):
+    if comm_graph is None:
+        n_neighbors, comm_graph = get_graph(N_agents, n_neighbors=n_neighbors, seed=seed)
+    return SimpleP2PSetup(N_agents, n_neighbors, comm_graph, c_mg, c_pr, c_tr, c_regul, T, x_pr_setpoint, loads)
+
 if __name__ == '__main__':
     import argparse
 
@@ -56,15 +86,10 @@ if __name__ == '__main__':
     np.random.seed(seed)
     N_it_per_residual_computation = 10
     N_agents = 6
-    n_neighbors = 2 # for simplicity, each agent has the same number of neighbours. This is only used to create the communication graph (but i's not needed otherwise)
     N_random_tests = 1
 
     # parameters
-    c_mg = 10
-    c_pr = 10
-    c_tr = 1
     T = 24*4
-    c_regul = 0.1
     N_iter = 100000
     N_iter_per_timestep = [1, 100, 1000]
 
@@ -78,17 +103,9 @@ if __name__ == '__main__':
         ##########################################
         #        Test case creation              #
         ##########################################
-        is_connected = False
-        comm_graph = nx.random_regular_graph(n_neighbors, N_agents)
-        while not nx.is_connected(comm_graph):
-            n_neighbors = n_neighbors+1
-            comm_graph = nx.random_regular_graph(n_neighbors, N_agents)
-        # add self loops
-        for i in comm_graph.nodes:
-            comm_graph.add_edge(i,i)
-        # Make graph stochastic WARNING: THIS IS ALSO DOUBLY STOCHASTIC ONLY BECAUSE WE ARE USING A REGULAR GRAPH
-        comm_graph=nx.stochastic_graph(comm_graph.to_directed()).to_undirected()
-        game_params = SimpleP2PSetup(N_agents, n_neighbors, comm_graph, c_mg, c_pr, c_tr, c_regul, T, x_pr_setpoint, loads)
+        _, comm_graph = get_graph(N_agents)
+        game_params = get_game(loads=loads, x_pr_setpoint=x_pr_setpoint, T=T, N_agents=N_agents, comm_graph=comm_graph)
+
         print("Initializing game for test " + str(test) + " out of " +str(N_random_tests))
         logging.info("Initializing game for test " + str(test) + " out of " +str(N_random_tests))
         ##########################################
@@ -159,9 +176,8 @@ if __name__ == '__main__':
             for t in range(T):
                 print("Initializing time-step" + str(t) + " out of " + str(T))
                 logging.info("Initializing time-step" + str(t) + " out of " + str(T))
-                game_params = SimpleP2PSetup(N_agents, n_neighbors, comm_graph, c_mg, c_pr, c_tr, c_regul, 1, jnp.expand_dims(x_pr_setpoint[:,t], 1),
-                                             jnp.expand_dims(loads[:,t], 1))
                 game_old = copy.deepcopy(game)
+                game_params = get_game(jnp.expand_dims(loads[:,t], 1), jnp.expand_dims(x_pr_setpoint[:,t], 1), 1, N_agents, comm_graph=comm_graph)
                 game = AggregativePartialInfo(N_agents, comm_graph, game_params.Q, game_params.q, game_params.C,
                                               game_params.D, \
                                               game_params.A_eq_local_const, game_params.b_eq_local_const, \
