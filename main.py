@@ -16,7 +16,7 @@ def gaussian(x, alpha, r):
     return 1. / (math.sqrt(alpha ** math.pi)) * np.exp(-alpha * np.power((x - r), 2.))
 
 
-def generate_load_profile(N,T, variance) -> Float[np.ndarray, ""]:
+def generate_load_profile(N,T, variance, *, seed=None) -> Float[np.ndarray, ""]:
     loads = np.zeros((N,T,1))
     for i in range(N):
         peak_time = min(max(0.1*np.random.randn(), -1),1)
@@ -40,7 +40,7 @@ def get_graph(
     comm_graph = nx.random_regular_graph(n_neighbors, N_agents, seed=seed)
     while not nx.is_connected(comm_graph):
         n_neighbors = n_neighbors+1
-        comm_graph = nx.random_regular_graph(n_neighbors, N_agents)
+        comm_graph = nx.random_regular_graph(n_neighbors, N_agents, seed=seed)
     # add self loops
     for i in comm_graph.nodes:
         comm_graph.add_edge(i,i)
@@ -103,8 +103,8 @@ if __name__ == '__main__':
         ##########################################
         #        Test case creation              #
         ##########################################
-        _, comm_graph = get_graph(N_agents)
-        game_params = get_game(loads=loads, x_pr_setpoint=x_pr_setpoint, T=T, N_agents=N_agents, comm_graph=comm_graph)
+        n_neighbors, comm_graph = get_graph(N_agents, seed=seed)
+        game_params = get_game(loads=loads, x_pr_setpoint=x_pr_setpoint, T=T, N_agents=N_agents, comm_graph=comm_graph, n_neighbors=n_neighbors)
 
         print("Initializing game for test " + str(test) + " out of " +str(N_random_tests))
         logging.info("Initializing game for test " + str(test) + " out of " +str(N_random_tests))
@@ -177,7 +177,7 @@ if __name__ == '__main__':
                 print("Initializing time-step" + str(t) + " out of " + str(T))
                 logging.info("Initializing time-step" + str(t) + " out of " + str(T))
                 game_old = copy.deepcopy(game)
-                game_params = get_game(jnp.expand_dims(loads[:,t], 1), jnp.expand_dims(x_pr_setpoint[:,t], 1), 1, N_agents, comm_graph=comm_graph)
+                game_params = get_game(jnp.expand_dims(loads[:,t], 1), jnp.expand_dims(x_pr_setpoint[:,t], 1), 1, N_agents, comm_graph=comm_graph, n_neighbors=n_neighbors)
                 game = AggregativePartialInfo(N_agents, comm_graph, game_params.Q, game_params.q, game_params.C,
                                               game_params.D, \
                                               game_params.A_eq_local_const, game_params.b_eq_local_const, \
