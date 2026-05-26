@@ -95,7 +95,7 @@ class AggregativePartialInfo:
             agg: Float[Array, "N n_s 1"] = jnp.repeat(agg, N, axis=0)
 
             term1 = jnp.matmul(jnp.swapaxes(x,1,2),
-                              bmm3(self.Q, x) + self.q)
+                              0.5 * bmm3(self.Q, x) + self.q)
 
             term2 = (1/N) * bmm3(
                 jnp.swapaxes(bmm3(self.D, x), 1, 2),
