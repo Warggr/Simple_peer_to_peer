@@ -104,7 +104,7 @@ class PrimalDualPartialInfo(Solver[AggregativePartialInfo, PrimalDualPartialInfo
         b_i = self.game.b_eq_shared
         A_i_loc = self.game.A_eq_loc
         b_i_loc = self.game.b_eq_loc
-        F = self.game.F(x,agg)
+        F = self.game.F(x,agg * self.N)
         x_new = x - self.stepsize * (F + bmm3(transpose(A_i, 1,2), old_state.dual) + bmm3(transpose(A_i_loc, 1,2), old_state.dual_loc))
         dual_loc_new = dual_loc + self.stepsize * (bmm3(A_i_loc, x) - b_i_loc)
         aux_new = aux + self.stepsize * self.N * res

@@ -132,7 +132,7 @@ class AggregativePartialInfo:
 
             if agg is None:
                 Cx = bmm3(self.C, x)
-                agg = jnp.mean(Cx, axis=0, keepdims=True)
+                agg = jnp.sum(Cx, axis=0, keepdims=True)
                 agg = jnp.repeat(agg, N, axis=0)
 
             # barrier
