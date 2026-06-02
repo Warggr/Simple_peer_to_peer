@@ -143,6 +143,7 @@ class AggregativePartialInfo:
                 -1.0 / Ax,
                 -self.gamma_barr * jnp.ones_like(x)
             )
+            barrier = jnp.matrix_transpose(self.A_sel_positive_vars) @ barrier
 
             # F = Qx + q + (1/N)*(D_i'Cx + C_i'*D_i*x_i)
             term1 = bmm3(self.Q, x) + self.q
